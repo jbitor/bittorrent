@@ -1,0 +1,6 @@
+langauge: go
+go:
+- 1.1.2
+- release
+script:
+- GOPATH="$PWD" go test -v
