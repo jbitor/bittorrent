@@ -1,4 +1,4 @@
-package torrent
+package bittorrent
 
 import (
 	"crypto/rand"
