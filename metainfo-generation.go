@@ -72,15 +72,12 @@ func GenerateTorrentMetaInfo(options CreationOptions) (TorrentMeta, error) {
 	} else {
 		if fileInfo.Size() > 0 {
 			file, err := os.Open(options.Path)
-			defer file.Close()
-
 			if err != nil {
 				return nil, err
 			}
 
+			defer file.Close()
 			io.Copy(pieceHasher.Writer(), file)
-
-			file.Close()
 		}
 	}
 
