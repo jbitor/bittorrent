@@ -25,7 +25,7 @@ type pieceHasherWrapperWriter struct {
 }
 
 func (wrapper pieceHasherWrapperWriter) Write(data []byte) (int, error) {
-	return wrapper.Write(data)
+	return wrapper.hasher.Write(data)
 }
 
 func (self *pieceHasher) Writer() io.Writer {
