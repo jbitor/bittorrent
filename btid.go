@@ -102,3 +102,9 @@ func WeakRandomBTID() (id BTID) {
 
 	return BTID(bytes[:])
 }
+
+func (id BTID) BitDistance(other BTID) (distance float64) {
+	distanceVals := id.XoredUint32s(other)
+
+	return ((float64(distanceVals[0]) * 0x1000010000) + float64(distanceVals[1])) / 0x100000000000000000
+}
