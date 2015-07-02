@@ -3,8 +3,9 @@ package bittorrent
 import (
 	"errors"
 	"fmt"
-	"github.com/jbitor/bencoding"
 	"net"
+
+	"github.com/jbitor/bencoding"
 )
 
 type RemotePeer struct {

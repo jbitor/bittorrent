@@ -1,11 +1,12 @@
 package bittorrent
 
 import (
-	"github.com/jbitor/bencoding"
 	"io"
 	"io/ioutil"
 	"os"
 	"path/filepath"
+
+	"github.com/jbitor/bencoding"
 )
 
 type CreationOptions struct {

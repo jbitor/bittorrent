@@ -2,8 +2,9 @@ package bittorrent
 
 import (
 	"errors"
-	"github.com/jbitor/bencoding"
 	"io"
+
+	"github.com/jbitor/bencoding"
 )
 
 type TorrentMeta bencoding.Dict
