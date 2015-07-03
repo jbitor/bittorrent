@@ -49,6 +49,7 @@ func (s *swarm) GetInfo() (info *bencoding.Dict) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
+
 				logger.Printf("Connecting to peer %v.\n", peer)
 
 				conn, err := net.DialTCP("tcp", nil, &peer.Address)
@@ -56,28 +57,49 @@ func (s *swarm) GetInfo() (info *bencoding.Dict) {
 					logger.Printf("Failed to connect to %v: %v", peer, err)
 					return
 				}
+				defer conn.Close()
 
-				// TODO: Determine if we need a specific value here.
-				peerId := WeakRandomBTID()
+				logger.Printf("Successfully connected to peer %v.\n", peer)
+
+				// TODO: save this
+				peerIdData := []byte(WeakRandomBTID())
+				peerIdData[0] = byte("-"[0])
+				peerIdData[1] = byte("J"[0])
+				peerIdData[2] = byte("B"[0])
+				peerIdData[3] = byte("0"[0])
+				peerIdData[4] = byte("0"[0])
+				peerIdData[5] = byte("0"[0])
+				peerIdData[6] = byte("0"[0])
+				peerIdData[7] = byte("-"[0])
+				peerId := BTID(peerIdData)
 
 				logger.Printf("Sending handshake to %v", peer)
 
 				conn.SetWriteDeadline(time.Now().Add(8 * time.Second))
 				writeHandshake(conn, peerId, s.infoHash)
 
-				data := make([]byte, 0)
+				// logger.Printf("Sending keepalive to %v", peer)
+				// writeKeepAlive(conn)
 
-				conn.SetReadDeadline(time.Now().Add(8 * time.Second))
-				_, err = conn.Read(data)
-				if err != nil {
-					logger.Printf("Failed to get reply from %v: %v", peer, err)
+				data := make([]byte, 64)
+
+				conn.SetReadDeadline(time.Now().Add(12 * time.Second))
+
+				for {
+					_, err = conn.Read(data)
+					if err != nil {
+						logger.Printf("Failed to get reply from %v: %v", peer, err)
+						time.Sleep(1 * time.Second)
+						continue
+					}
+
+					logger.Printf("got a reply:\n%v\n", data)
 					return
 				}
-
-				logger.Printf("got a reply:\n%v\n", data)
-				return
 			}()
 		}(peer)
+
+		time.Sleep(1 * time.Second)
 	}
 
 	wg.Done()
