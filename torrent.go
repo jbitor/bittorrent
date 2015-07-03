@@ -13,7 +13,8 @@ type RemotePeer struct {
 }
 
 type LocalPeer struct {
-	Port int
+	Port   int
+	Swarms []*Swarm
 }
 
 func (remote *RemotePeer) String() string {
