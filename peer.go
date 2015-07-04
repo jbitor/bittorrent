@@ -180,45 +180,57 @@ func (p *swarmPeer) listen() {
 
 		case msgChoke:
 			logger.Warning("Got unsupported choke message from %v.", p)
+			if len(body) != 0 {
+				logger.Error("Choke message had %v B body -- should have been empty.", len(body))
+			}
 
 		case msgUnchoke:
 			logger.Warning("Got unsupported unchoke message from %v.", p)
+			if len(body) != 0 {
+				logger.Error("Unchoke message had %v B body -- should have been empty.", len(body))
+			}
 
 		case msgInterested:
 			logger.Warning("Got unsupported interested message from %v.", p)
+			if len(body) != 0 {
+				logger.Error("Interested message had %v B body -- should have been empty.", len(body))
+			}
 
 		case msgNotInterested:
 			logger.Warning("Got unsupported not interested message from %v.", p)
+			if len(body) != 0 {
+				logger.Error("Unsuported message had %v B body -- should have been empty.", len(body))
+			}
 
 		case msgHave:
-			logger.Warning("Got unsupported have message from %v.", p)
+			logger.Warning("Got %v B unsupported have message from %v.", len(body), p)
 
 		case msgRequest:
-			logger.Warning("Got unsupported request message from %v.", p)
+			logger.Warning("Got %v B unsupported request message from %v.", len(body), p)
 
 		case msgPiece:
-			logger.Warning("Got unsupported piece message from %v.", p)
+			logger.Warning("Got %v B unsupported piece message from %v.", len(body), p)
 
 		case msgDhtPort:
-			logger.Warning("Got unsupported DHT port message from %v.", p)
+			logger.Warning("Got %v B unsupported DHT port message from %v.", len(body), p)
 
 		case msgHaveAll:
-			logger.Warning("Got unsupported have all message from %v.", p)
+			logger.Warning("Got %v B unsupported have all message from %v.", len(body), p)
 
 		case msgHaveNone:
-			logger.Warning("Got unsupported have none message from %v.", p)
+			logger.Warning("Got %v B unsupported have none message from %v.", len(body), p)
 
 		case msgSuggestPiece:
-			logger.Warning("Got unsupported suggest piece message from %v.", p)
+			logger.Warning("Got %v B unsupported suggest piece message from %v.", len(body), p)
 
 		case msgRejectRequest:
-			logger.Warning("Got unsupported reject request message from %v.", p)
+			logger.Warning("Got %v B unsupported reject request message from %v.", len(body), p)
 
 		case msgAllowedFast:
-			logger.Warning("Got unsupported allowed fast message from %v.", p)
+			logger.Warning("Got %v B unsupported allowed fast message from %v.", len(body), p)
 
 		default:
-			logger.Warning("Got message of unknown type %v.", messageType)
+			logger.Warning("Got %v B message of unknown type %v.", len(body), messageType)
 		}
 
 	}
@@ -258,6 +270,8 @@ func (p *swarmPeer) listen() {
 				length := uint32(0)
 				buf := bytes.NewBuffer([]byte(chunk[0:4]))
 				binary.Read(buf, binary.BigEndian, &length)
+
+				logger.Debug("next message length is %v B, have %v B", length, len(unprocessedBuffer)-4)
 
 				if uint32(len(unprocessedBuffer)) >= length+4 {
 					message := unprocessedBuffer[4 : 4+length]
