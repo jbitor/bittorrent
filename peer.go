@@ -19,18 +19,28 @@ type peerMessageType byte
 const peerProtocolHeader = "\x13BitTorrent protocol"
 
 const (
-	msgChoke         peerMessageType = 0
-	msgUnchoke                       = 1
-	msgInterested                    = 2
-	msgNotInterested                 = 3
-	msgHave                          = 4
-	msgBitfield                      = 5
-	msgRequest                       = 6
-	msgPiece                         = 7
-	msgCancel                        = 8
+	msgChoke         peerMessageType = 0x00
+	msgUnchoke                       = 0x01
+	msgInterested                    = 0x02
+	msgNotInterested                 = 0x03
+	msgHave                          = 0x04
+	msgBitfield                      = 0x05
+	msgRequest                       = 0x06
+	msgPiece                         = 0x07
+	msgCancel                        = 0x08
+
+	// BEP-9 Extension Protocl
+	msgDhtPort = 0x09
+
+	// BEP-6 Fast Extension
+	msgHaveAll       = 0x0E
+	msgHaveNone      = 0x0F
+	msgSuggestPiece  = 0x0D
+	msgRejectRequest = 0x10
+	msgAllowedFast   = 0x11
 
 	// BEP-10 Extension Protocl
-	msgExtended = 20
+	msgExtended = 0x14
 )
 
 type swarmPeer struct {
@@ -102,6 +112,11 @@ func (p *swarmPeer) listen() {
 		switch messageType {
 
 		case msgExtended:
+			if len(body) == 0 {
+				logger.Printf("got extension message with 0-length body -- what?!")
+				return
+			}
+
 			extensionId := body[0]
 
 			bencoded := body[1:len(body)]
@@ -113,6 +128,7 @@ func (p *swarmPeer) listen() {
 				return
 			}
 
+			// TODO: A more sensible generic way of handling extensions and extension mesages
 			if extensionId == 0 {
 				// Handshake!
 
@@ -128,7 +144,18 @@ func (p *swarmPeer) listen() {
 
 							// TODO:
 							go func() {
-								// sendExtensionMessage....
+								requestBody, err := bencoding.Encode(bencoding.Dict{
+									"msg_type": bencoding.Int(0), // request piece
+									"piece":    bencoding.Int(0),
+								})
+
+								if err != nil {
+									logger.Printf("unable to encode extension handshake: %v", err)
+									return
+								}
+
+								logger.Printf("requesting first piece of metadata!")
+								writeMessage(p.conn, msgExtended, append([]byte{ourUtMetadataId}, requestBody...))
 							}()
 						} else {
 							logger.Printf("Peer %v does not support metadata exchange!", p)
@@ -145,11 +172,53 @@ func (p *swarmPeer) listen() {
 			} else if p.extensions.bep9MetadataExchange.supported && extensionId == p.extensions.bep9MetadataExchange.id {
 				onMdxMessage(data.(bencoding.Dict))
 			} else {
-				logger.Printf("got extension message for unrecognied extension id from %v", p)
+				logger.Printf("got extension message for unrecognied extension id from %v: %v", p, data)
 			}
 
+		case msgBitfield:
+			logger.Printf("Got unsupported bitfield message from %v.", p)
+
+		case msgChoke:
+			logger.Printf("Got unsupported choke message from %v.", p)
+
+		case msgUnchoke:
+			logger.Printf("Got unsupported unchoke message from %v.", p)
+
+		case msgInterested:
+			logger.Printf("Got unsupported interested message from %v.", p)
+
+		case msgNotInterested:
+			logger.Printf("Got unsupported not interested message from %v.", p)
+
+		case msgHave:
+			logger.Printf("Got unsupported have message from %v.", p)
+
+		case msgRequest:
+			logger.Printf("Got unsupported request message from %v.", p)
+
+		case msgPiece:
+			logger.Printf("Got unsupported piece message from %v.", p)
+
+		case msgDhtPort:
+			logger.Printf("Got unsupported DHT port message from %v.", p)
+
+		case msgHaveAll:
+			logger.Printf("Got unsupported have all message from %v.", p)
+
+		case msgHaveNone:
+			logger.Printf("Got unsupported have none message from %v.", p)
+
+		case msgSuggestPiece:
+			logger.Printf("Got unsupported suggest piece message from %v.", p)
+
+		case msgRejectRequest:
+			logger.Printf("Got unsupported reject request message from %v.", p)
+
+		case msgAllowedFast:
+			logger.Printf("Got unsupported allowed fast message from %v.", p)
+
 		default:
-			logger.Printf("Got message of unsupported type %v: %v", messageType, body)
+			logger.Printf("Got message of unknown type %v.", messageType)
 		}
 
 	}
@@ -216,6 +285,7 @@ func (p *swarmPeer) listen() {
 		readLength, err := p.conn.Read(chunkBuffer)
 
 		if readLength > 0 {
+			logger.Printf("got chunk of %v bytes from %v", readLength, p)
 			onChunk(string(chunkBuffer[0:readLength]))
 		}
 
@@ -231,7 +301,14 @@ func (p *swarmPeer) listen() {
 
 }
 
+const (
+	extensionHandshakeId uint8 = iota
+	ourUtMetadataId            = 3
+	ourUtPexId                 = 4
+)
+
 func writeHandshake(w io.Writer, peerId BTID, infohash BTID) {
+	// BitTorrent Handshake
 	header := []byte(peerProtocolHeader)
 	extensionFlags := make([]byte, 8)
 	extensionFlags[5] |= 0x10 // indicate extension protocol support
@@ -242,6 +319,26 @@ func writeHandshake(w io.Writer, peerId BTID, infohash BTID) {
 
 	// If we had any pieces, we would need to indicate so here, but we don't.
 	// writeMessage(w, msgBitfield, piecesBitfield)
+
+	// TODO: move this somewhere else and only fire it after we check their extension flags
+	// Write Extension Protcol Handshake
+
+	handshakeBody, err := bencoding.Encode(bencoding.Dict{
+		"v": bencoding.String("jbitor 0.0.0"),
+		"m": bencoding.Dict{
+			"ut_metadata": bencoding.Int(ourUtMetadataId),
+			"ut_pex":      bencoding.Int(ourUtPexId),
+		},
+		"p": bencoding.Int(PORT),
+	})
+
+	if err != nil {
+		logger.Printf("unable to encode extension handshake: %v", err)
+		return
+	}
+
+	logger.Printf("sent extension handshake")
+	writeMessage(w, msgExtended, append([]byte{extensionHandshakeId}, handshakeBody...))
 }
 
 func writeKeepAlive(w io.Writer) {
@@ -263,12 +360,4 @@ func writeMessage(w io.Writer, messageType peerMessageType, body []byte) {
 	if body != nil {
 		w.Write(body)
 	}
-}
-
-// Writes an BEP-10 extension handshake message.
-func writeExtensionHandshake(w io.Writer, data bencoding.Dict) {
-	body := make([]byte, 0)
-	// TODO
-	_ = body
-	writeMessage(w, msgExtended, nil)
 }

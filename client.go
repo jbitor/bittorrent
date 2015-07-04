@@ -61,6 +61,8 @@ func (c *client) Swarm(infoHash BTID) Swarm {
 //
 // XXX: This isn't likely to be used yet, since we're using a different
 // outgoing port, adn aren't publishing ourselves anywhere.
+// PS: Actually, BEP-10 allows you to share your listening port with the
+// other peer.
 func (c *client) listen() {
 	for {
 		conn, err := c.listener.AcceptTCP()
@@ -99,10 +101,11 @@ type Swarm interface {
 }
 
 type swarm struct {
-	client   Client
-	infoHash BTID
-	peers    []*swarmPeer
-	info     *bencoding.Dict
+	client     Client
+	infoHash   BTID
+	peers      []*swarmPeer
+	info       *bencoding.Dict
+	infoPieces []string
 }
 
 func (s *swarm) String() string {
