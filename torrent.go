@@ -2,25 +2,10 @@ package bittorrent
 
 import (
 	"errors"
-	"fmt"
 	"net"
 
 	"github.com/jbitor/bencoding"
 )
-
-type RemotePeer struct {
-	Address net.TCPAddr
-}
-
-type LocalPeer struct {
-	Port   int
-	Swarms []*Swarm
-}
-
-func (remote *RemotePeer) String() string {
-	return fmt.Sprintf("<RemotePeer at %v:%v>",
-		remote.Address.IP, remote.Address.Port)
-}
 
 // Decodes a compact peer address from a 6-byte bencoding.String to a net.TCPAddr.
 // Returns an error if the string is the wrong length.
