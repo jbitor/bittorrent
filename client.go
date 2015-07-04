@@ -1,9 +1,11 @@
 package bittorrent
 
 import (
+	"crypto/sha1"
+	"errors"
 	"fmt"
 	"net"
-	"sync"
+	"time"
 
 	"github.com/jbitor/bencoding"
 )
@@ -95,17 +97,20 @@ type Swarm interface {
 	// The info-hash of the torrent this swarm is for.
 	InfoHash() BTID
 	// Returns the torrent metainfo dictionary, blocking until it's available.
-	Info() (info *bencoding.Dict)
+	Info() (info bencoding.Dict)
+	// Returns whether the torrent's info has been downloaded yet.
+	HasInfo() bool
+	// Attempts to set the info for this torrent, returning an error if it's not valid.
+	SetInfo(info []byte) (err error)
 	// Adds a new address to the list of known peers.
 	AddPeer(addr net.TCPAddr)
 }
 
 type swarm struct {
-	client     Client
-	infoHash   BTID
-	peers      []*swarmPeer
-	info       *bencoding.Dict
-	infoPieces []string
+	client   Client
+	infoHash BTID
+	peers    []*swarmPeer
+	info     bencoding.Dict
 }
 
 func (s *swarm) String() string {
@@ -114,6 +119,25 @@ func (s *swarm) String() string {
 
 func (s *swarm) InfoHash() (infoHash BTID) {
 	return s.infoHash
+}
+
+func (s *swarm) HasInfo() bool {
+	return s.info != nil
+}
+
+func (s *swarm) SetInfo(info []byte) (err error) {
+	hashData := sha1.Sum(info)
+	hash := string(hashData[:])
+	if s.InfoHash() == BTID(hash) {
+		logger.Info("Validated full info for torrent!")
+		info, _ := bencoding.Decode(info)
+		s.info = info.(bencoding.Dict)
+		logger.Notice("Got info for torrent %v: %v", s.infoHash, s.info)
+		return nil
+	} else {
+		logger.Error("Infohash invalid: %v expected != %v actual", s.InfoHash(), BTID(hash))
+		return errors.New("info hash was invalid")
+	}
 }
 
 func (s *swarm) Client() Client {
@@ -130,16 +154,17 @@ func (s *swarm) AddPeer(addr net.TCPAddr) {
 	})
 }
 
-func (s *swarm) Info() *bencoding.Dict {
+func (s *swarm) Info() bencoding.Dict {
 	logger.Info("Attempting to Info for %s", s)
 	s.connectToAll()
 
-	logger.Info("Finished connecting to peers. Now what?")
+	logger.Info("Finished connecting to peers. Polling until we have all of the info.")
 
-	wg := sync.WaitGroup{}
-	wg.Add(1)
-	wg.Wait()
-	return nil
+	for !s.HasInfo() {
+		time.Sleep(time.Second)
+	}
+
+	return s.info
 }
 
 // Blocks until we've attempted to connect to all available peers.

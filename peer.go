@@ -43,6 +43,14 @@ const (
 	msgExtended = 0x14
 )
 
+const (
+	extensionHandshakeId uint8 = 0
+	ourUtMetadataId            = 13 + iota
+	ourUtPexId
+)
+
+const metadataPieceSize = 16384
+
 type swarmPeer struct {
 	swarm Swarm
 	addr  net.TCPAddr
@@ -66,6 +74,11 @@ type swarmPeer struct {
 			supported bool
 		}
 	}
+
+	// Whether we have all of the infoPieces that this peer claims are accurate
+	infoComplete bool
+	// The potential info pieces we've been given by this peer.
+	infoPieces [][]byte
 }
 
 func (p *swarmPeer) String() string {
@@ -88,11 +101,11 @@ func (p *swarmPeer) connect() {
 		return
 	}
 
-	logger.Debug("Sending handshake to %v...", p)
-	writeHandshake(conn, p.swarm.Client().PeerId(), p.swarm.InfoHash())
-
 	p.gotHandshake = false
 	p.conn = conn
+	logger.Debug("Sending handshake to %v...", p)
+	p.writeHandshake(p.swarm.Client().PeerId(), p.swarm.InfoHash())
+
 	go p.listen()
 }
 
@@ -103,118 +116,42 @@ func (p *swarmPeer) listen() {
 		p.conn = nil
 	}()
 
-	onMdxMessage := func(message string) {
-		// Now, we need to decode to the end of the dict, and then maybe there'll be
-		// data too!
-
-		data, remainder, err := bencoding.DecodeFirst([]byte(message))
-		if err != nil {
-			logger.Error("Error decoding message: %v", err)
-			return
-		}
-
-		logger.Notice("got metadata exchange message %v + %v B", data, len(remainder))
-	}
-
 	// Called to handle each non-keepalive message.
 	onMessage := func(messageType peerMessageType, body string) {
 		switch messageType {
 
 		case msgExtended:
-			if len(body) == 0 {
-				logger.Warning("got extension message with 0-length body -- what?!")
-				return
-			}
-
-			extensionId := body[0]
-
-			// THE BODY MAY NOT BE BENCODED, YOU GOOF
-
-			// TODO: A more sensible generic way of handling extensions and extension mesages
-			if extensionId == 0 {
-				// Handshake!
-				logger.Info("Got an extension handshake message")
-
-				bencoded := body[1:]
-				data, err := bencoding.Decode([]byte(bencoded))
-
-				if err != nil {
-					logger.Error("Error decoding message: %v", err)
-					return
-				}
-
-				// Check if the peer supports metadata exchange
-				if dataM, hasM := data.(bencoding.Dict)["m"]; hasM {
-					if mdxIdP, hasMdx := dataM.(bencoding.Dict)["ut_metadata"]; hasMdx {
-						mdxId := uint8(mdxIdP.(bencoding.Int))
-
-						if mdxId != 0 {
-							logger.Info("Peer %v supports metadata exchange, using extension ID %v.", p, mdxId)
-							p.extensions.bep9MetadataExchange.supported = true
-							p.extensions.bep9MetadataExchange.id = mdxId
-
-							// TODO:
-							go func() {
-								requestBody, err := bencoding.Encode(bencoding.Dict{
-									"msg_type": bencoding.Int(0), // request piece
-									"piece":    bencoding.Int(0),
-								})
-
-								if err != nil {
-									logger.Error("unable to encode extension handshake: %v", err)
-									return
-								}
-
-								logger.Notice("requesting first piece of metadata!")
-								writeMessage(p.conn, msgExtended, append([]byte{ourUtMetadataId}, requestBody...))
-							}()
-						} else {
-							logger.Info("Peer %v does not support metadata exchange!", p)
-							return
-						}
-					} else {
-						logger.Info("Peer %v does not support metadata exchange!", p)
-						return
-					}
-				} else {
-					logger.Info("Peer %v does not support metadata exchange!", p)
-					return
-				}
-			} else if p.extensions.bep9MetadataExchange.supported && extensionId == p.extensions.bep9MetadataExchange.id {
-				onMdxMessage(body[1:])
-			} else {
-				logger.Warning("got extension message for unrecognied extension id %v from %v: %v", extensionId, p, body[1:])
-			}
+			p.onExtensionMessage(body)
 
 		case msgBitfield:
-			logger.Warning("Got unsupported bitfield message from %v.", p)
+			logger.Debug("Got no-op bitfield message from %v.", p)
 
 		case msgChoke:
-			logger.Warning("Got unsupported choke message from %v.", p)
+			logger.Debug("Got no-op choke message from %v.", p)
 			if len(body) != 0 {
 				logger.Error("Choke message had %v B body -- should have been empty.", len(body))
 			}
 
 		case msgUnchoke:
-			logger.Warning("Got unsupported unchoke message from %v.", p)
+			logger.Debug("Got no-op unchoke message from %v.", p)
 			if len(body) != 0 {
-				logger.Error("Unchoke message had %v B body -- should have been empty.", len(body))
+				logger.Debug("Unchoke message had %v B body -- should have been empty.", len(body))
 			}
 
 		case msgInterested:
-			logger.Warning("Got unsupported interested message from %v.", p)
+			logger.Debug("Got no-op interested message from %v.", p)
 			if len(body) != 0 {
 				logger.Error("Interested message had %v B body -- should have been empty.", len(body))
 			}
 
 		case msgNotInterested:
-			logger.Warning("Got unsupported not interested message from %v.", p)
+			logger.Debug("Got no-op not interested message from %v.", p)
 			if len(body) != 0 {
 				logger.Error("Unsuported message had %v B body -- should have been empty.", len(body))
 			}
 
 		case msgHave:
-			logger.Warning("Got %v B unsupported have message from %v.", len(body), p)
+			logger.Debug("Got %v B no-op have message from %v.", len(body), p)
 
 		case msgRequest:
 			logger.Warning("Got %v B unsupported request message from %v.", len(body), p)
@@ -327,21 +264,117 @@ func (p *swarmPeer) listen() {
 
 }
 
-const (
-	extensionHandshakeId uint8 = iota
-	ourUtMetadataId            = 3
-	ourUtPexId                 = 4
-)
+func (p *swarmPeer) onExtensionMessage(body string) {
+	if len(body) == 0 {
+		logger.Warning("got extension message with 0-length body -- what?!")
+		return
+	}
 
-func writeHandshake(w io.Writer, peerId BTID, infohash BTID) {
+	extensionId := body[0]
+
+	// TODO: A more sensible generic way of handling extensions and extension mesages
+	if extensionId == 0 {
+		// Handshake!
+		logger.Info("Got an extension handshake message")
+
+		bencoded := body[1:]
+		data, err := bencoding.Decode([]byte(bencoded))
+
+		if err != nil {
+			logger.Error("Error decoding message: %v", err)
+			return
+		}
+
+		// Check if the peer supports metadata exchange
+		if dataM, hasM := data.(bencoding.Dict)["m"]; hasM {
+			if mdxIdP, hasMdx := dataM.(bencoding.Dict)["ut_metadata"]; hasMdx {
+				mdxId := uint8(mdxIdP.(bencoding.Int))
+
+				if mdxId != 0 {
+					logger.Info("Peer %v supports metadata exchange, using extension ID %v.", p, mdxId)
+					p.extensions.bep9MetadataExchange.supported = true
+					p.extensions.bep9MetadataExchange.id = mdxId
+					go p.requestNextMetadataPiece()
+				} else {
+					logger.Info("Peer %v does not support metadata exchange!", p)
+					return
+				}
+			} else {
+				logger.Info("Peer %v does not support metadata exchange!", p)
+				return
+			}
+		} else {
+			logger.Info("Peer %v does not support metadata exchange!", p)
+			return
+		}
+	} else if p.extensions.bep9MetadataExchange.supported && extensionId == ourUtMetadataId {
+		p.onMdxMessage(body[1:])
+	} else {
+		logger.Warning("got extension message for unrecognied extension id %v from %v: %v", extensionId, p, body[1:])
+	}
+}
+
+// Called whenever we get a metadata exchange extension message.
+func (p *swarmPeer) onMdxMessage(message string) {
+	data, remainder, err := bencoding.DecodeFirst([]byte(message))
+	if err != nil {
+		logger.Error("Error decoding message: %v", err)
+		return
+	}
+
+	switch data.(bencoding.Dict)["msg_type"].(bencoding.Int) {
+	case 0:
+		// request
+	case 1:
+		// piece
+		logger.Notice("Got metadata piece [%v] from %v.", len(p.infoPieces), p)
+		p.infoPieces = append(p.infoPieces, remainder)
+
+		// TODO: check that we're getting that right piece!
+
+		totalSize := int(data.(bencoding.Dict)["total_size"].(bencoding.Int))
+
+		if len(p.infoPieces)*metadataPieceSize >= totalSize {
+			logger.Notice("Got full info.")
+			p.onCompleteInfoProvided()
+		} else {
+			p.requestNextMetadataPiece()
+		}
+	case 2:
+		// reject
+	default:
+		logger.Info("Got unrecognized metadata exchange message type")
+	}
+}
+
+// Requests the next piece of metadata we don't yet have from this peer.
+// Must only be called if we know the peer supports it.
+// Does nothing if we already have all of the pieces they claim.
+func (p *swarmPeer) requestNextMetadataPiece() {
+	if !p.infoComplete {
+		i := len(p.infoPieces)
+		requestBody, err := bencoding.Encode(bencoding.Dict{
+			"msg_type": bencoding.Int(0), // request piece
+			"piece":    bencoding.Int(i),
+		})
+		if err != nil {
+			logger.Error("unable to encode extension metadata request: %v", err)
+			return
+		}
+		logger.Notice("requesting piece %v of metadata!", i)
+		p.writeMessage(msgExtended, append([]byte{p.extensions.bep9MetadataExchange.id}, requestBody...))
+	}
+}
+
+func (p *swarmPeer) writeHandshake(peerId BTID, infohash BTID) {
 	// BitTorrent Handshake
 	header := []byte(peerProtocolHeader)
 	extensionFlags := make([]byte, 8)
 	extensionFlags[5] |= 0x10 // indicate extension protocol support
-	w.Write(header)
-	w.Write(extensionFlags)
-	w.Write([]byte(infohash))
-	w.Write([]byte(peerId))
+	p.conn.Write(header)
+	p.conn.Write(extensionFlags)
+	p.conn.Write([]byte(infohash))
+	p.conn.Write([]byte(peerId))
 
 	// If we had any pieces, we would need to indicate so here, but we don't.
 	// writeMessage(w, msgBitfield, piecesBitfield)
@@ -364,15 +397,10 @@ func writeHandshake(w io.Writer, peerId BTID, infohash BTID) {
 	}
 
 	logger.Info("sent extension handshake")
-	writeMessage(w, msgExtended, append([]byte{extensionHandshakeId}, handshakeBody...))
+	p.writeMessage(msgExtended, append([]byte{extensionHandshakeId}, handshakeBody...))
 }
 
-func writeKeepAlive(w io.Writer) {
-	binary.Write(w, binary.BigEndian, int32(0))
-}
-
-// Writes a non-keepalive message.
-func writeMessage(w io.Writer, messageType peerMessageType, body []byte) {
+func (p *swarmPeer) writeMessage(messageType peerMessageType, body []byte) {
 	var messageLength int32
 	if body != nil {
 		messageLength = 1 + int32(len(body))
@@ -380,10 +408,25 @@ func writeMessage(w io.Writer, messageType peerMessageType, body []byte) {
 		messageLength = 1
 	}
 
-	binary.Write(w, binary.BigEndian, messageLength)
-	w.Write([]byte{byte(messageType)})
+	binary.Write(p.conn, binary.BigEndian, messageLength)
+	p.conn.Write([]byte{byte(messageType)})
 
 	if body != nil {
-		w.Write(body)
+		p.conn.Write(body)
+	}
+}
+
+// Called when have all of info pieces from the peer.
+func (p *swarmPeer) onCompleteInfoProvided() {
+	if p.swarm.HasInfo() {
+		logger.Warning("Got redundant info. Aborting verification.")
+		return
+	}
+
+	infoData := bytes.Join(p.infoPieces, []byte{})
+	err := p.swarm.SetInfo(infoData)
+	if err != nil {
+		logger.Error("Info from peer %v was invalid.", p)
+		p.karma -= 10000
 	}
 }
