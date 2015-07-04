@@ -40,6 +40,22 @@ type swarmPeer struct {
 	karma int
 	// TODO: peerId
 	gotHandshake bool
+
+	extensions struct {
+		bep5dht struct {
+			supported bool
+		}
+		bep10ExtensionsProtocol struct {
+			supported bool
+		}
+		bep9MetadataExchange struct {
+			supported bool
+			id        uint8
+		}
+		utPex struct {
+			supported bool
+		}
+	}
 }
 
 func (p *swarmPeer) String() string {
@@ -77,16 +93,17 @@ func (p *swarmPeer) listen() {
 		p.conn = nil
 	}()
 
+	onMdxMessage := func(message bencoding.Dict) {
+		logger.Printf("got metadata exchange message!! %v", message)
+	}
+
 	// Called to handle each non-keepalive message.
-	gotMessage := func(messageType peerMessageType, body string) {
+	onMessage := func(messageType peerMessageType, body string) {
 		switch messageType {
 
 		case msgExtended:
-			extendedType := body[0]
-			if extendedType != 0 {
-				logger.Printf("Got unsupported extension message type: %v", extendedType)
-				return
-			}
+			extensionId := body[0]
+
 			bencoded := body[1:len(body)]
 			logger.Printf("Got an extension handshake message")
 			data, err := bencoding.Decode([]byte(bencoded))
@@ -96,17 +113,39 @@ func (p *swarmPeer) listen() {
 				return
 			}
 
-			// Check if the peer supports metadata exchange
-			if dataM, hasM := data.(bencoding.Dict)["m"]; hasM {
-				if mdxId, hasMdx := dataM.(bencoding.Dict)["ut_metadata"]; hasMdx {
-					logger.Printf("Peer %v supports metadata exchange, using extension ID %v.", p, mdxId)
+			if extensionId == 0 {
+				// Handshake!
+
+				// Check if the peer supports metadata exchange
+				if dataM, hasM := data.(bencoding.Dict)["m"]; hasM {
+					if mdxIdP, hasMdx := dataM.(bencoding.Dict)["ut_metadata"]; hasMdx {
+						mdxId := uint8(mdxIdP.(bencoding.Int))
+
+						if mdxId != 0 {
+							logger.Printf("Peer %v supports metadata exchange, using extension ID %v.", p, mdxId)
+							p.extensions.bep9MetadataExchange.supported = true
+							p.extensions.bep9MetadataExchange.id = mdxId
+
+							// TODO:
+							go func() {
+								// sendExtensionMessage....
+							}()
+						} else {
+							logger.Printf("Peer %v does not support metadata exchange!", p)
+							return
+						}
+					} else {
+						logger.Printf("Peer %v does not support metadata exchange!", p)
+						return
+					}
 				} else {
 					logger.Printf("Peer %v does not support metadata exchange!", p)
 					return
 				}
+			} else if p.extensions.bep9MetadataExchange.supported && extensionId == p.extensions.bep9MetadataExchange.id {
+				onMdxMessage(data.(bencoding.Dict))
 			} else {
-				logger.Printf("Peer %v does not support any extensions!", p)
-				return
+				logger.Printf("got extension message for unrecognied extension id from %v", p)
 			}
 
 		default:
@@ -119,7 +158,7 @@ func (p *swarmPeer) listen() {
 	unprocessedBuffer := make([]byte, 0)
 
 	// Called to handle each chunk of data we get from the peer's connection.
-	gotChunk := func(chunk string) {
+	onChunk := func(chunk string) {
 		unprocessedBuffer = append(unprocessedBuffer, []byte(chunk)...)
 
 		// Process all complete messages in the buffer.
@@ -162,7 +201,7 @@ func (p *swarmPeer) listen() {
 
 					messageType := peerMessageType(message[0])
 					messageBody := message[1:len(message)]
-					gotMessage(messageType, string(messageBody))
+					onMessage(messageType, string(messageBody))
 				} else {
 					// Still waiting for some of message.
 					break
@@ -177,7 +216,7 @@ func (p *swarmPeer) listen() {
 		readLength, err := p.conn.Read(chunkBuffer)
 
 		if readLength > 0 {
-			gotChunk(string(chunkBuffer[0:readLength]))
+			onChunk(string(chunkBuffer[0:readLength]))
 		}
 
 		if err == io.EOF {
@@ -185,7 +224,7 @@ func (p *swarmPeer) listen() {
 			p.karma -= 1
 			break
 		} else if err != nil {
-			logger.Printf("Unkonwn error reading from %v: %v", p, err)
+			logger.Printf("Unknown error reading from %v: %v", p, err)
 			time.Sleep(6 * time.Second)
 		}
 	}
