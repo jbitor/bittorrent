@@ -176,6 +176,10 @@ func (p *swarmPeer) listen() {
 	for {
 		readLength, err := p.conn.Read(chunkBuffer)
 
+		if readLength > 0 {
+			gotChunk(string(chunkBuffer[0:readLength]))
+		}
+
 		if err == io.EOF {
 			logger.Printf("Remote peer disconnected: %v", p)
 			p.karma -= 1
@@ -183,12 +187,6 @@ func (p *swarmPeer) listen() {
 		} else if err != nil {
 			logger.Printf("Unkonwn error reading from %v: %v", p, err)
 			time.Sleep(6 * time.Second)
-			continue
-		} else if readLength > 0 {
-			gotChunk(string(chunkBuffer[0:readLength]))
-			continue
-		} else {
-			// There was no data to read.
 		}
 	}
 
