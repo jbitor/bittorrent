@@ -110,12 +110,22 @@ func (s *swarm) GetInfo() (info *bencoding.Dict) {
 
 							logger.Printf("got handshake: %v", chunk)
 						} else {
+							if len(chunk) < 4 {
+								logger.Printf("ignoring too-short chunk")
+								return
+							}
 							buf := bytes.NewBuffer([]byte(chunk[0:4]))
 							binary.Read(buf, binary.BigEndian, &length)
 							logger.Printf("message length: %v", length)
 
-							if length == 0 {
+							if length < 0 {
+								logger.Printf("got -length message...")
+								return
+							} else if length == 0 {
 								logger.Printf("Got keepalive.")
+								return
+							} else if int32(len(chunk))-4 < length {
+								logger.Printf("Ignoring too-long (chunked?) message")
 								return
 							}
 
@@ -132,7 +142,7 @@ func (s *swarm) GetInfo() (info *bencoding.Dict) {
 									return
 								}
 								bencoded := body[1:len(body)]
-								logger.Printf("Got an extension message")
+								logger.Printf("Got an extension handshake message")
 								data, err := bencoding.Decode([]byte(bencoded))
 								logger.Printf("error/message: %v/%v", err, data)
 							default:
@@ -151,7 +161,8 @@ func (s *swarm) GetInfo() (info *bencoding.Dict) {
 						} else if readLength > 0 {
 							handleChunk(string(buffer[0:readLength]))
 						} else {
-							logger.Fatalf("WTF?")
+							logger.Printf("Got zero-length no-error read() from %v", peer)
+							time.Sleep(6 * time.Second)
 						}
 					}
 				}()
@@ -159,9 +170,6 @@ func (s *swarm) GetInfo() (info *bencoding.Dict) {
 		}(peer)
 
 		time.Sleep(1 * time.Second)
-
-		// one is enough for now
-		break
 	}
 
 	wg.Done()
