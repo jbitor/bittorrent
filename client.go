@@ -129,10 +129,9 @@ func (s *swarm) SetInfo(info []byte) (err error) {
 	hashData := sha1.Sum(info)
 	hash := string(hashData[:])
 	if s.InfoHash() == BTID(hash) {
-		logger.Info("Validated full info for torrent!")
 		info, _ := bencoding.Decode(info)
 		s.info = info.(bencoding.Dict)
-		logger.Notice("Got info for torrent %v: %v", s.infoHash, s.info)
+		logger.Info("Validated full info for torrent! %v", s)
 		return nil
 	} else {
 		logger.Error("Infohash invalid: %v expected != %v actual", s.InfoHash(), BTID(hash))
@@ -155,10 +154,7 @@ func (s *swarm) AddPeer(addr net.TCPAddr) {
 }
 
 func (s *swarm) Info() bencoding.Dict {
-	logger.Info("Attempting to Info for %s", s)
 	s.connectToAll()
-
-	logger.Info("Finished connecting to peers. Polling until we have all of the info.")
 
 	for !s.HasInfo() {
 		time.Sleep(time.Second)
@@ -171,6 +167,6 @@ func (s *swarm) Info() bencoding.Dict {
 func (s *swarm) connectToAll() {
 	logger.Info("Attempting to connect all peers for %v.", s)
 	for _, peer := range s.peers {
-		peer.connect()
+		go peer.connect()
 	}
 }
