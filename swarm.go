@@ -1,6 +1,9 @@
 package bittorrent
 
 import (
+	"bytes"
+	"encoding/binary"
+	"io"
 	"net"
 	"sync"
 	"time"
@@ -40,6 +43,17 @@ func (s *swarm) AddPeer(peer *RemotePeer) {
 }
 
 func (s *swarm) GetInfo() (info *bencoding.Dict) {
+	peerIdData := []byte(WeakRandomBTID())
+	peerIdData[0] = byte("-"[0])
+	peerIdData[1] = byte("J"[0])
+	peerIdData[2] = byte("B"[0])
+	peerIdData[3] = byte("0"[0])
+	peerIdData[4] = byte("0"[0])
+	peerIdData[5] = byte("0"[0])
+	peerIdData[6] = byte("0"[0])
+	peerIdData[7] = byte("-"[0])
+	peerId := BTID(peerIdData)
+
 	var wg sync.WaitGroup
 
 	wg.Add(1)
@@ -57,49 +71,97 @@ func (s *swarm) GetInfo() (info *bencoding.Dict) {
 					logger.Printf("Failed to connect to %v: %v", peer, err)
 					return
 				}
-				defer conn.Close()
+				// conn.Close()
 
 				logger.Printf("Successfully connected to peer %v.\n", peer)
 
-				// TODO: save this
-				peerIdData := []byte(WeakRandomBTID())
-				peerIdData[0] = byte("-"[0])
-				peerIdData[1] = byte("J"[0])
-				peerIdData[2] = byte("B"[0])
-				peerIdData[3] = byte("0"[0])
-				peerIdData[4] = byte("0"[0])
-				peerIdData[5] = byte("0"[0])
-				peerIdData[6] = byte("0"[0])
-				peerIdData[7] = byte("-"[0])
-				peerId := BTID(peerIdData)
-
 				logger.Printf("Sending handshake to %v", peer)
-
-				conn.SetWriteDeadline(time.Now().Add(8 * time.Second))
 				writeHandshake(conn, peerId, s.infoHash)
 
-				// logger.Printf("Sending keepalive to %v", peer)
-				// writeKeepAlive(conn)
+				// Send keepalives every couple minutes
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					for {
+						logger.Printf("Sending keepalive to %v", peer)
+						writeKeepAlive(conn)
+						time.Sleep(120 * time.Second)
+					}
+				}()
 
-				data := make([]byte, 64)
+				// Read incoming messages
+				wg.Add(1)
+				go func() {
+					length := int32(0)
+					defer wg.Done()
 
-				conn.SetReadDeadline(time.Now().Add(12 * time.Second))
+					gotHandshake := false
 
-				for {
-					_, err = conn.Read(data)
-					if err != nil {
-						logger.Printf("Failed to get reply from %v: %v", peer, err)
-						time.Sleep(1 * time.Second)
-						continue
+					handleChunk := func(chunk string) {
+						// XXX: This is treating a chunk as a full message. Very bad.
+						logger.Printf("got chunk from %v, length %v", peer, len(chunk))
+
+						if !gotHandshake {
+							if chunk[0:len(peerProtocolHeader)] != peerProtocolHeader {
+								logger.Printf("Peer protocol header missing!")
+							}
+
+							gotHandshake = true
+
+							logger.Printf("got handshake: %v", chunk)
+						} else {
+							buf := bytes.NewBuffer([]byte(chunk[0:4]))
+							binary.Read(buf, binary.BigEndian, &length)
+							logger.Printf("message length: %v", length)
+
+							if length == 0 {
+								logger.Printf("Got keepalive.")
+								return
+							}
+
+							msgType := messageType(chunk[4])
+							body := chunk[5 : 5+length-1]
+
+							logger.Printf("got message type/body: %v/%v", msgType, body)
+
+							switch msgType {
+							case msgExtended:
+								extendedType := body[0]
+								if extendedType != 0 {
+									logger.Printf("Got unsupported extension message type: %v", extendedType)
+									return
+								}
+								bencoded := body[1:len(body)]
+								logger.Printf("Got an extension message")
+								data, err := bencoding.Decode([]byte(bencoded))
+								logger.Printf("error/message: %v/%v", err, data)
+							default:
+								logger.Printf("Got unsupported message type: %v", msgType)
+							}
+						}
 					}
 
-					logger.Printf("got a reply:\n%v\n", data)
-					return
-				}
+					buffer := make([]byte, 32768)
+					for {
+						readLength, err := conn.Read(buffer)
+
+						if err != nil && err != io.EOF {
+							logger.Printf("Error reading from %v: %v", peer, err)
+							time.Sleep(6 * time.Second)
+						} else if readLength > 0 {
+							handleChunk(string(buffer[0:readLength]))
+						} else {
+							logger.Fatalf("WTF?")
+						}
+					}
+				}()
 			}()
 		}(peer)
 
 		time.Sleep(1 * time.Second)
+
+		// one is enough for now
+		break
 	}
 
 	wg.Done()

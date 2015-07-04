@@ -10,6 +10,8 @@ import (
 // Types of messages supported by the BitTorrent peer protocol
 type messageType byte
 
+const peerProtocolHeader = "\x13BitTorrent protocol"
+
 const (
 	msgChoke         messageType = 0
 	msgUnchoke                   = 1
@@ -25,8 +27,19 @@ const (
 	msgExtended = 20
 )
 
+type PeerMessage interface {
+	Type() messageType
+	Encode() (data []byte)
+	Decode(data []byte) (err error)
+}
+
+type peerMessage struct {
+	t       messageType
+	rawBody string
+}
+
 func writeHandshake(w io.Writer, peerId BTID, infohash BTID) {
-	header := []byte("\x13BitTorrent protocol")
+	header := []byte(peerProtocolHeader)
 	extensionFlags := make([]byte, 8)
 	extensionFlags[5] |= 0x10 // indicate extension protocol support
 	w.Write(header)
