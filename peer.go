@@ -103,8 +103,17 @@ func (p *swarmPeer) listen() {
 		p.conn = nil
 	}()
 
-	onMdxMessage := func(message bencoding.Dict) {
-		logger.Notice("got metadata exchange message!! %v", message)
+	onMdxMessage := func(message string) {
+		// Now, we need to decode to the end of the dict, and then maybe there'll be
+		// data too!
+
+		data, remainder, err := bencoding.DecodeFirst([]byte(message))
+		if err != nil {
+			logger.Error("Error decoding message: %v", err)
+			return
+		}
+
+		logger.Notice("got metadata exchange message %v + %v B", data, len(remainder))
 	}
 
 	// Called to handle each non-keepalive message.
@@ -119,18 +128,20 @@ func (p *swarmPeer) listen() {
 
 			extensionId := body[0]
 
-			bencoded := body[1:len(body)]
-			logger.Info("Got an extension handshake message")
-			data, err := bencoding.Decode([]byte(bencoded))
-
-			if err != nil {
-				logger.Error("Error decoding message: %v", err)
-				return
-			}
+			// THE BODY MAY NOT BE BENCODED, YOU GOOF
 
 			// TODO: A more sensible generic way of handling extensions and extension mesages
 			if extensionId == 0 {
 				// Handshake!
+				logger.Info("Got an extension handshake message")
+
+				bencoded := body[1:]
+				data, err := bencoding.Decode([]byte(bencoded))
+
+				if err != nil {
+					logger.Error("Error decoding message: %v", err)
+					return
+				}
 
 				// Check if the peer supports metadata exchange
 				if dataM, hasM := data.(bencoding.Dict)["m"]; hasM {
@@ -170,9 +181,9 @@ func (p *swarmPeer) listen() {
 					return
 				}
 			} else if p.extensions.bep9MetadataExchange.supported && extensionId == p.extensions.bep9MetadataExchange.id {
-				onMdxMessage(data.(bencoding.Dict))
+				onMdxMessage(body[1:])
 			} else {
-				logger.Warning("got extension message for unrecognied extension id from %v: %v", p, data)
+				logger.Warning("got extension message for unrecognied extension id %v from %v: %v", extensionId, p, body[1:])
 			}
 
 		case msgBitfield:
@@ -230,7 +241,7 @@ func (p *swarmPeer) listen() {
 			logger.Warning("Got %v B unsupported allowed fast message from %v.", len(body), p)
 
 		default:
-			logger.Warning("Got %v B message of unknown type %v.", len(body), messageType)
+			logger.Error("Got %v B message of unknown type 0x%02x.", len(body), messageType)
 		}
 
 	}
@@ -248,18 +259,19 @@ func (p *swarmPeer) listen() {
 				handshakeSize := 20 + 8 + 20 + 20
 
 				if len(unprocessedBuffer) >= handshakeSize {
-					handshake := unprocessedBuffer[0:handshakeSize]
+					handshake := unprocessedBuffer[:handshakeSize]
 
-					if string(handshake[0:len(peerProtocolHeader)]) != peerProtocolHeader {
+					if string(handshake[:len(peerProtocolHeader)]) != peerProtocolHeader {
 						logger.Info("Peer protocol header missing for %v!", p)
 						break
 					}
 					// TODO: veriffy the rest of the handshake
 
-					unprocessedBuffer = unprocessedBuffer[handshakeSize:len(unprocessedBuffer)]
+					unprocessedBuffer = unprocessedBuffer[handshakeSize:]
 					p.gotHandshake = true
 					continue
 				} else {
+					// Wait for the rest of the handshake.
 					break
 				}
 			} else {
@@ -268,14 +280,14 @@ func (p *swarmPeer) listen() {
 					break
 				}
 				length := uint32(0)
-				buf := bytes.NewBuffer([]byte(chunk[0:4]))
+				buf := bytes.NewBuffer([]byte(unprocessedBuffer[:4]))
 				binary.Read(buf, binary.BigEndian, &length)
 
 				logger.Debug("next message length is %v B, have %v B", length, len(unprocessedBuffer)-4)
 
 				if uint32(len(unprocessedBuffer)) >= length+4 {
 					message := unprocessedBuffer[4 : 4+length]
-					unprocessedBuffer = unprocessedBuffer[4+length : len(unprocessedBuffer)]
+					unprocessedBuffer = unprocessedBuffer[4+length:]
 
 					if length == 0 {
 						logger.Info("Got keepalive message from %s.", p)
@@ -283,8 +295,8 @@ func (p *swarmPeer) listen() {
 					}
 
 					messageType := peerMessageType(message[0])
-					messageBody := message[1:len(message)]
-					onMessage(messageType, string(messageBody))
+					messageBody := string(message[1:])
+					onMessage(messageType, messageBody)
 				} else {
 					// Still waiting for some of message.
 					break
@@ -300,7 +312,7 @@ func (p *swarmPeer) listen() {
 
 		if readLength > 0 {
 			logger.Info("got chunk of %v bytes from %v", readLength, p)
-			onChunk(string(chunkBuffer[0:readLength]))
+			onChunk(string(chunkBuffer[:readLength]))
 		}
 
 		if err == io.EOF {
