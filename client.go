@@ -67,9 +67,9 @@ func (c *client) listen() {
 	for {
 		conn, err := c.listener.AcceptTCP()
 		if err != nil {
-			logger.Printf("Error accepting new connection: %v", err)
+			logger.Info("Error accepting new connection: %v", err)
 		} else {
-			logger.Printf("Got incoming peer connection. Not implemented! Closing.")
+			logger.Info("Got incoming peer connection. Not implemented! Closing.")
 			conn.Close()
 		}
 	}
@@ -131,10 +131,10 @@ func (s *swarm) AddPeer(addr net.TCPAddr) {
 }
 
 func (s *swarm) Info() *bencoding.Dict {
-	logger.Printf("Attempting to Info for %s", s)
+	logger.Info("Attempting to Info for %s", s)
 	s.connectToAll()
 
-	logger.Printf("Finished connecting to peers. Now what?")
+	logger.Info("Finished connecting to peers. Now what?")
 
 	wg := sync.WaitGroup{}
 	wg.Add(1)
@@ -144,7 +144,7 @@ func (s *swarm) Info() *bencoding.Dict {
 
 // Blocks until we've attempted to connect to all available peers.
 func (s *swarm) connectToAll() {
-	logger.Printf("Attempting to connect all peers for %v.", s)
+	logger.Info("Attempting to connect all peers for %v.", s)
 	for _, peer := range s.peers {
 		peer.connect()
 	}

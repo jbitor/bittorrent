@@ -78,17 +78,17 @@ func (p *swarmPeer) connect() {
 		return
 	}
 
-	logger.Printf("Attempting to connect to %v for %v.", p, p.swarm)
+	logger.Debug("Attempting to connect to %v for %v.", p, p.swarm)
 
 	// TODO(jre): We really need to dial on the same port as we're
 	// listening, but net doesn't directly let us do that.
 	conn, err := net.DialTCP("tcp", nil, &p.addr)
 	if err != nil {
-		logger.Printf("Failed to connect to %v for %v: %v", p, p.swarm, err)
+		logger.Warning("Failed to connect to %v for %v: %v", p, p.swarm, err)
 		return
 	}
 
-	logger.Printf("Sending handshake to %v...", p)
+	logger.Debug("Sending handshake to %v...", p)
 	writeHandshake(conn, p.swarm.Client().PeerId(), p.swarm.InfoHash())
 
 	p.gotHandshake = false
@@ -104,7 +104,7 @@ func (p *swarmPeer) listen() {
 	}()
 
 	onMdxMessage := func(message bencoding.Dict) {
-		logger.Printf("got metadata exchange message!! %v", message)
+		logger.Notice("got metadata exchange message!! %v", message)
 	}
 
 	// Called to handle each non-keepalive message.
@@ -113,18 +113,18 @@ func (p *swarmPeer) listen() {
 
 		case msgExtended:
 			if len(body) == 0 {
-				logger.Printf("got extension message with 0-length body -- what?!")
+				logger.Warning("got extension message with 0-length body -- what?!")
 				return
 			}
 
 			extensionId := body[0]
 
 			bencoded := body[1:len(body)]
-			logger.Printf("Got an extension handshake message")
+			logger.Info("Got an extension handshake message")
 			data, err := bencoding.Decode([]byte(bencoded))
 
 			if err != nil {
-				logger.Printf("Error decoding message: %v", err)
+				logger.Error("Error decoding message: %v", err)
 				return
 			}
 
@@ -138,7 +138,7 @@ func (p *swarmPeer) listen() {
 						mdxId := uint8(mdxIdP.(bencoding.Int))
 
 						if mdxId != 0 {
-							logger.Printf("Peer %v supports metadata exchange, using extension ID %v.", p, mdxId)
+							logger.Info("Peer %v supports metadata exchange, using extension ID %v.", p, mdxId)
 							p.extensions.bep9MetadataExchange.supported = true
 							p.extensions.bep9MetadataExchange.id = mdxId
 
@@ -150,75 +150,75 @@ func (p *swarmPeer) listen() {
 								})
 
 								if err != nil {
-									logger.Printf("unable to encode extension handshake: %v", err)
+									logger.Error("unable to encode extension handshake: %v", err)
 									return
 								}
 
-								logger.Printf("requesting first piece of metadata!")
+								logger.Notice("requesting first piece of metadata!")
 								writeMessage(p.conn, msgExtended, append([]byte{ourUtMetadataId}, requestBody...))
 							}()
 						} else {
-							logger.Printf("Peer %v does not support metadata exchange!", p)
+							logger.Info("Peer %v does not support metadata exchange!", p)
 							return
 						}
 					} else {
-						logger.Printf("Peer %v does not support metadata exchange!", p)
+						logger.Info("Peer %v does not support metadata exchange!", p)
 						return
 					}
 				} else {
-					logger.Printf("Peer %v does not support metadata exchange!", p)
+					logger.Info("Peer %v does not support metadata exchange!", p)
 					return
 				}
 			} else if p.extensions.bep9MetadataExchange.supported && extensionId == p.extensions.bep9MetadataExchange.id {
 				onMdxMessage(data.(bencoding.Dict))
 			} else {
-				logger.Printf("got extension message for unrecognied extension id from %v: %v", p, data)
+				logger.Warning("got extension message for unrecognied extension id from %v: %v", p, data)
 			}
 
 		case msgBitfield:
-			logger.Printf("Got unsupported bitfield message from %v.", p)
+			logger.Warning("Got unsupported bitfield message from %v.", p)
 
 		case msgChoke:
-			logger.Printf("Got unsupported choke message from %v.", p)
+			logger.Warning("Got unsupported choke message from %v.", p)
 
 		case msgUnchoke:
-			logger.Printf("Got unsupported unchoke message from %v.", p)
+			logger.Warning("Got unsupported unchoke message from %v.", p)
 
 		case msgInterested:
-			logger.Printf("Got unsupported interested message from %v.", p)
+			logger.Warning("Got unsupported interested message from %v.", p)
 
 		case msgNotInterested:
-			logger.Printf("Got unsupported not interested message from %v.", p)
+			logger.Warning("Got unsupported not interested message from %v.", p)
 
 		case msgHave:
-			logger.Printf("Got unsupported have message from %v.", p)
+			logger.Warning("Got unsupported have message from %v.", p)
 
 		case msgRequest:
-			logger.Printf("Got unsupported request message from %v.", p)
+			logger.Warning("Got unsupported request message from %v.", p)
 
 		case msgPiece:
-			logger.Printf("Got unsupported piece message from %v.", p)
+			logger.Warning("Got unsupported piece message from %v.", p)
 
 		case msgDhtPort:
-			logger.Printf("Got unsupported DHT port message from %v.", p)
+			logger.Warning("Got unsupported DHT port message from %v.", p)
 
 		case msgHaveAll:
-			logger.Printf("Got unsupported have all message from %v.", p)
+			logger.Warning("Got unsupported have all message from %v.", p)
 
 		case msgHaveNone:
-			logger.Printf("Got unsupported have none message from %v.", p)
+			logger.Warning("Got unsupported have none message from %v.", p)
 
 		case msgSuggestPiece:
-			logger.Printf("Got unsupported suggest piece message from %v.", p)
+			logger.Warning("Got unsupported suggest piece message from %v.", p)
 
 		case msgRejectRequest:
-			logger.Printf("Got unsupported reject request message from %v.", p)
+			logger.Warning("Got unsupported reject request message from %v.", p)
 
 		case msgAllowedFast:
-			logger.Printf("Got unsupported allowed fast message from %v.", p)
+			logger.Warning("Got unsupported allowed fast message from %v.", p)
 
 		default:
-			logger.Printf("Got message of unknown type %v.", messageType)
+			logger.Warning("Got message of unknown type %v.", messageType)
 		}
 
 	}
@@ -239,7 +239,7 @@ func (p *swarmPeer) listen() {
 					handshake := unprocessedBuffer[0:handshakeSize]
 
 					if string(handshake[0:len(peerProtocolHeader)]) != peerProtocolHeader {
-						logger.Printf("Peer protocol header missing for %v!", p)
+						logger.Info("Peer protocol header missing for %v!", p)
 						break
 					}
 					// TODO: veriffy the rest of the handshake
@@ -264,7 +264,7 @@ func (p *swarmPeer) listen() {
 					unprocessedBuffer = unprocessedBuffer[4+length : len(unprocessedBuffer)]
 
 					if length == 0 {
-						logger.Printf("Got keepalive message from %s.", p)
+						logger.Info("Got keepalive message from %s.", p)
 						continue
 					}
 
@@ -285,16 +285,16 @@ func (p *swarmPeer) listen() {
 		readLength, err := p.conn.Read(chunkBuffer)
 
 		if readLength > 0 {
-			logger.Printf("got chunk of %v bytes from %v", readLength, p)
+			logger.Info("got chunk of %v bytes from %v", readLength, p)
 			onChunk(string(chunkBuffer[0:readLength]))
 		}
 
 		if err == io.EOF {
-			logger.Printf("Remote peer disconnected: %v", p)
+			logger.Info("Remote peer disconnected: %v", p)
 			p.karma -= 1
 			break
 		} else if err != nil {
-			logger.Printf("Unknown error reading from %v: %v", p, err)
+			logger.Info("Unknown error reading from %v: %v", p, err)
 			time.Sleep(6 * time.Second)
 		}
 	}
@@ -333,11 +333,11 @@ func writeHandshake(w io.Writer, peerId BTID, infohash BTID) {
 	})
 
 	if err != nil {
-		logger.Printf("unable to encode extension handshake: %v", err)
+		logger.Info("unable to encode extension handshake: %v", err)
 		return
 	}
 
-	logger.Printf("sent extension handshake")
+	logger.Info("sent extension handshake")
 	writeMessage(w, msgExtended, append([]byte{extensionHandshakeId}, handshakeBody...))
 }
 
