@@ -15,13 +15,34 @@ type Client interface {
 	PeerId() BTID
 	// Returns a connection to a Swarm() for a given torrent, starting one if
 	// none exists.
-	Swarm(infoHash BTID) Swarm
+	Swarm(infoHash BTID, peersSource <-chan []net.TCPAddr) Swarm
 }
 
 type client struct {
 	peerId   BTID
 	listener *net.TCPListener
 	swarms   map[BTID]Swarm
+}
+
+type Swarm interface {
+	Client() Client
+	// The info-hash of the torrent this swarm is for.
+	InfoHash() BTID
+	// Returns the torrent metainfo dictionary, blocking until it's available.
+	Info() (info bencoding.Dict)
+	// Returns whether the torrent's info has been downloaded yet.
+	HasInfo() bool
+	// Attempts to set the info for this torrent, returning an error if it's not valid.
+	SetInfo(info []byte) (err error)
+	// Adds a new address to the list of known peers.
+	AddPeer(addr net.TCPAddr) *swarmPeer
+}
+
+type swarm struct {
+	client   Client
+	infoHash BTID
+	peers    []*swarmPeer
+	info     bencoding.Dict
 }
 
 const PORT = 6881
@@ -47,15 +68,36 @@ func (c *client) PeerId() BTID {
 }
 
 // Information and connections related for a specific torrent.
-func (c *client) Swarm(infoHash BTID) Swarm {
-	s := swarm{
-		infoHash: infoHash,
-		// TODO: map, deduplication:
-		peers:  make([]*swarmPeer, 0),
-		client: c,
-		info:   nil,
+func (c *client) Swarm(infoHash BTID, peersSource <-chan []net.TCPAddr) Swarm {
+	if existingSwarm, has := c.swarms[infoHash]; has {
+		// HACK -- oh jeeze
+		for _ = range peersSource {
+			// consume this to prevent panic
+		}
+
+		return existingSwarm
 	}
-	return Swarm(&s)
+
+	sd := swarm{
+		infoHash: infoHash,
+		peers:    make([]*swarmPeer, 0),
+		client:   c,
+		info:     nil,
+	}
+
+	s := Swarm(&sd)
+	c.swarms[infoHash] = s
+
+	go func() {
+		for peerAddresses := range peersSource {
+			for _, peerAddress := range peerAddresses {
+				peer := s.AddPeer(peerAddress)
+				go peer.connect()
+			}
+		}
+	}()
+
+	return s
 }
 
 // Listen for incoming connections, handing them off to the appropriate
@@ -92,27 +134,6 @@ func genPeerId() (peerId BTID) {
 	return
 }
 
-type Swarm interface {
-	Client() Client
-	// The info-hash of the torrent this swarm is for.
-	InfoHash() BTID
-	// Returns the torrent metainfo dictionary, blocking until it's available.
-	Info() (info bencoding.Dict)
-	// Returns whether the torrent's info has been downloaded yet.
-	HasInfo() bool
-	// Attempts to set the info for this torrent, returning an error if it's not valid.
-	SetInfo(info []byte) (err error)
-	// Adds a new address to the list of known peers.
-	AddPeer(addr net.TCPAddr)
-}
-
-type swarm struct {
-	client   Client
-	infoHash BTID
-	peers    []*swarmPeer
-	info     bencoding.Dict
-}
-
 func (s *swarm) String() string {
 	return fmt.Sprintf("<swarm %s>", s.InfoHash())
 }
@@ -143,30 +164,22 @@ func (s *swarm) Client() Client {
 	return s.client
 }
 
-func (s *swarm) AddPeer(addr net.TCPAddr) {
-	s.peers = append(s.peers, &swarmPeer{
+func (s *swarm) AddPeer(addr net.TCPAddr) *swarmPeer {
+	peer := &swarmPeer{
 		swarm:        Swarm(s),
 		addr:         addr,
 		karma:        0,
 		conn:         nil,
 		gotHandshake: false,
-	})
+	}
+	s.peers = append(s.peers, peer)
+	return peer
 }
 
 func (s *swarm) Info() bencoding.Dict {
-	s.connectToAll()
-
 	for !s.HasInfo() {
 		time.Sleep(time.Second)
 	}
 
 	return s.info
-}
-
-// Blocks until we've attempted to connect to all available peers.
-func (s *swarm) connectToAll() {
-	logger.Info("Attempting to connect all peers for %v.", s)
-	for _, peer := range s.peers {
-		go peer.connect()
-	}
 }
