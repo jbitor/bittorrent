@@ -71,9 +71,11 @@ func (c *client) PeerId() BTID {
 func (c *client) Swarm(infoHash BTID, peersSource <-chan []net.TCPAddr) Swarm {
 	if existingSwarm, has := c.swarms[infoHash]; has {
 		// HACK -- oh jeeze
-		for _ = range peersSource {
-			// consume this to prevent panic
-		}
+		go func() {
+			for _ = range peersSource {
+				// consume this to prevent panic
+			}
+		}()
 
 		return existingSwarm
 	}
